@@ -1,1 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CampusBin · IIT Roorkee waste collection</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #eef2f5;
+      --panel: #fff;
+      --ink: #14232b;
+      --mut: #5d6f79;
+      --line: #d6dee3;
+      --teal: #0e7c86;
+      --red: #c2410c;
+      --amb: #d99a0b;
+      --ok: #2f8f46;
+    }
+    * { box-sizing: border-box; }
 
+    body {
+      margin: 0;
+      font: 14px/1.45 'Schibsted Grotesk', system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      display: grid;
+      grid-template-columns: min(420px, 100vw) 1fr;
+      height: 100vh;
+    }
+
+    /* ---------- side panel ---------- */
+    aside {
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    header { padding: 14px 16px 8px; }
+    h1 { font-size: 20px; margin: 0; }
+    header p { margin: 2px 0 0; color: var(--mut); font-size: 12px; }
+
+    nav { display: flex; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+    nav button {
+      background: none;
+      border: 0;
+      padding: 8px 10px;
+      font: inherit;
+      font-weight: 500;
+      color: var(--mut);
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+    }
+    nav button.on { color: var(--teal); border-color: var(--teal); }
+    button:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
+
+    section { padding: 12px 16px; overflow: auto; flex: 1; display: none; }
+    section.on { display: block; }
+
+    /* ---------- cards, buttons, form controls ---------- */
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+    .k { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    .k small { color: var(--mut); display: block; }
+    .k b { font-size: 20px; }
+
+    .btn {
+      background: var(--teal);
+      color: #fff;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn.alt { background: #e3eaee; color: var(--ink); }
+
+    label { display: flex; justify-content: space-between; margin-top: 10px; font-weight: 500; }
+    input[type=range] { width: 100%; accent-color: var(--teal); }
+    select, input[type=search] {
+      font: inherit;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      max-width: 100%;
+    }
+
+    /* ---------- tables, bars ---------- */
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    td, th { padding: 5px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+    th { color: var(--mut); font-weight: 500; }
+    .bar { height: 6px; background: #e3eaee; border-radius: 3px; min-width: 46px; }
+    .bar i { display: block; height: 100%; border-radius: 3px; }
+    .mut { color: var(--mut); }
+    .trip { border-left: 4px solid; padding: 4px 0 4px 10px; margin: 10px 0; }
+
+    #map { height: 100vh; }
+
+    @media (max-width: 800px) {
+      body { grid-template-columns: 1fr; grid-template-rows: 55vh 45vh; }
+      #map { grid-row: 1; height: 55vh; }
+      aside { grid-row: 2; border: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <aside>
+    <header>
+      <h1>CampusBin</h1>
+      <p>IIT Roorkee · 30 smart bins · <span id="clk"></span> simulated time</p>
+    </header>
+
+    <nav role="tablist">
+      <button class="on" data-t="bins">Bins</button>
+      <button data-t="plan">Collection plan</button>
+      <button data-t="fc">Next 24 h</button>
+      <button data-t="about">About</button>
+    </nav>
+
+    <!-- Tab 1: live bins -->
+    <section id="s-bins" class="on">
+      <div class="row">
+        <div class="k"><small>Need pickup (≥70%)</small><b id="kCrit">–</b></div>
+        <div class="k"><small>Average fill</small><b id="kAvg">–</b></div>
+      </div>
+
+      <input type="search" id="q" placeholder="Search bin or zone" style="width:100%" aria-label="Search bins">
+      <table id="tb" style="margin-top:8px"></table>
+
+      <h3 style="margin:16px 0 6px; font-size:14px">Report an overflow</h3>
+      <select id="rb" aria-label="Bin"></select>
+      <select id="rt" aria-label="Type">
+        <option>overflow</option>
+        <option>missed collection</option>
+      </select>
+      <button class="btn" onclick="sendReport()">Send report</button>
+      <div id="rl" class="mut" style="margin-top:6px; font-size:12px"></div>
+    </section>
+
+    <!-- Tab 2: route planning -->
+    <section id="s-plan">
+      <label>Collect bins above <b id="thv">70</b>%</label>
+      <input id="th" type="range" min="30" max="95" value="70">
+
+      <label>Also bins filling within <b id="hov">3</b> h</label>
+      <input id="ho" type="range" min="0" max="8" value="3">
+
+      <label>Truck capacity <b id="cav">1500</b> L</label>
+      <input id="ca" type="range" min="500" max="4000" step="100" value="1500">
+
+      <div style="margin:10px 0">
+        <button class="btn" onclick="doPlan()">Plan routes</button>
+        <button class="btn alt" onclick="collectAll()">Mark as collected</button>
+        <button class="btn alt" onclick="resetAll()">Reset demo</button>
+      </div>
+
+      <div id="kpi" class="mut">Plan routes to compare against a fixed route that visits every bin.</div>
+      <div id="trips"></div>
+    </section>
+
+    <!-- Tab 3: 24 h forecast -->
+    <section id="s-fc">
+      <p class="mut">If nothing is collected, how the 30 bins fill over the next 24 hours (model: zone base rate × hourly peak pattern).</p>
+      <canvas id="c1" height="220"></canvas>
+      <canvas id="c2" height="200" style="margin-top:14px"></canvas>
+    </section>
+
+    <!-- Tab 4: about -->
+    <section id="s-about">
+      <p><b>Data.</b> <span id="src"></span></p>
+      <p><b>Routing.</b> <span id="rmode"></span>. Trips are capacity-limited; each tour is built with nearest-neighbour then 2-opt on road distance.</p>
+      <p><b>Assumed:</b> usage zones, bin sizes and fill rates are simulated until sensors report. Send real readings to <code>POST /api/telemetry</code>.</p>
+    </section>
+  </aside>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    // ---------- setup ----------
+    const $ = id => document.getElementById(id);
+    const map = L.map('map').setView([29.865, 77.897], 16);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const COL = ['#0e7c86', '#c2410c', '#6d28d9', '#b45309', '#be185d', '#15803d'];
+    const col = f => f >= 90 ? '#c2410c' : f >= 70 ? '#d99a0b' : '#2f8f46';
+
+    let mk = {};          // bin id -> map marker
+    let rl = [];          // route polylines currently on the map
+    let last = null;      // latest /api/bins response
+    let plan = null;      // latest /api/plan response
+    let charts = {};
+
+    const j = async (u, o) => (await fetch(u, o)).json();
+    const post = (u, b) => j(u, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(b)
+    });
+
+    // ---------- tabs and sliders ----------
+    document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+      document.querySelectorAll('nav button, section').forEach(e => e.classList.remove('on'));
+      b.classList.add('on');
+      $('s-' + b.dataset.t).classList.add('on');
+      if (b.dataset.t === 'fc') forecast();
+    });
+
+    [['th', 'thv'], ['ho', 'hov'], ['ca', 'cav']].forEach(([input, label]) => {
+      $(input).oninput = e => $(label).textContent = e.target.value;
+    });
+    $('q').oninput = () => last && table();
+
+    // ---------- bin table ----------
+    function table() {
+      const q = $('q').value.toLowerCase();
+      const rows = [...last.bins]
+        .sort((a, b) => b.fill - a.fill)
+        .filter(b => (b.name + b.zone + b.id).toLowerCase().includes(q))
+        .map(b => `
+          <tr style="cursor:pointer" onclick="goBin('${b.id}')">
+            <td>${b.name}${b.flagged ? ' ⚑' : ''}</td>
+            <td class="mut">${b.zone}</td>
+            <td>
+              <div class="bar"><i style="width:${b.fill}%; background:${col(b.fill)}"></i></div>
+              ${b.fill.toFixed(0)}%
+            </td>
+            <td>${b.tte_h == null ? '–' : b.tte_h + ' h'}</td>
+          </tr>`)
+        .join('');
+      $('tb').innerHTML = '<tr><th>Bin</th><th>Zone</th><th>Fill</th><th>Full in</th></tr>' + rows;
+    }
+
+    function goBin(id) {
+      const b = last.bins.find(x => x.id === id);
+      map.setView([b.lat, b.lon], 18);
+      mk[id].openPopup();
+    }
+
+    // ---------- live refresh (every 2 s) ----------
+    async function refresh() {
+      const d = await j('/api/bins');
+      last = d;
+
+      const h = d.sim_hour;
+      $('clk').textContent = Math.floor(h) + ':' + String(Math.floor(h % 1 * 60)).padStart(2, '0');
+
+      d.bins.forEach(b => {
+        const style = {
+          radius: 9,
+          color: b.flagged ? '#14232b' : '#fff',
+          weight: b.flagged ? 3 : 2,
+          fillColor: col(b.fill),
+          fillOpacity: .95
+        };
+        const popup = `
+          <b>${b.name}</b> · ${b.zone}<br>
+          ${b.cap} L · fill ${b.fill.toFixed(0)}% · full in ${b.tte_h ?? '–'} h<br>
+          Sensor battery ${b.battery.toFixed(0)}%
+          ${b.last_collected ? '<br>Collected ' + b.last_collected : ''}<br>
+          <small>KML: ${b.src}</small>`;
+        if (!mk[b.id]) mk[b.id] = L.circleMarker([b.lat, b.lon], style).addTo(map).bindPopup(popup);
+        else mk[b.id].setStyle(style).setPopupContent(popup);
+      });
+
+      if (!window.fit) {                       // one-time setup on first load
+        map.fitBounds(L.latLngBounds(d.bins.map(b => [b.lat, b.lon])).pad(.15));
+        window.fit = 1;
+        L.marker([d.depot.lat, d.depot.lon]).addTo(map).bindPopup('Waste depot');
+        d.bins.forEach(b => $('rb').add(new Option(b.name + ' (' + b.zone + ')', b.id)));
+        $('src').textContent = `${d.source.used} bins chosen from ${d.source.candidates} distinct KML points inside the campus box; the 10 "Dustbin" folder points are always kept, the rest are spread evenly across campus.`;
+        $('rmode').textContent = d.routing;
+      }
+
+      $('kCrit').textContent = d.bins.filter(b => b.fill >= 70).length;
+      $('kAvg').textContent = Math.round(d.bins.reduce((s, b) => s + b.fill, 0) / d.bins.length) + '%';
+      $('rl').innerHTML = d.reports.slice(-3).map(r => `${r.at} ${r.type}: ${r.name}`).join('<br>');
+      table();
+    }
+
+    // ---------- route planning ----------
+    async function doPlan() {
+      plan = await j(`/api/plan?threshold=${$('th').value}&horizon=${$('ho').value}&cap=${$('ca').value}`);
+
+      rl.forEach(x => map.removeLayer(x));
+      rl = [];
+      plan.trips.forEach((t, i) => {
+        rl.push(L.polyline(t.path, { color: COL[i % 6], weight: 5, opacity: .85 }).addTo(map));
+      });
+      if (rl.length) map.fitBounds(L.featureGroup(rl).getBounds().pad(.2));
+
+      const o = plan.optimized, b = plan.baseline, s = plan.savings;
+      $('kpi').innerHTML = `
+        <div class="row">
+          <div class="k"><small>Bins visited</small><b>${o.stops}/${last.bins.length}</b></div>
+          <div class="k"><small>Distance</small><b>${o.km} km</b></div>
+          <div class="k"><small>Saved vs visit-all (${b.km} km)</small><b>${s.pct}%</b></div>
+          <div class="k"><small>Fuel · CO₂ avoided</small><b>${s.fuel_l} L · ${s.co2_kg} kg</b></div>
+        </div>`;
+
+      $('trips').innerHTML = plan.trips.map((t, i) => `
+        <div class="trip" style="border-color:${COL[i % 6]}">
+          <b>Trip ${i + 1}</b> · ${t.stops.length} stops · ${t.km} km · ${t.duration_min} min · ${t.load_l} L
+          <table>
+            ${t.stops.map((s, n) => `
+              <tr>
+                <td>${n + 1}</td>
+                <td>${s.name}${s.flagged ? ' ⚑' : ''}</td>
+                <td>${s.fill}%</td>
+                <td class="mut">+${s.eta_min} min</td>
+              </tr>`).join('')}
+          </table>
+        </div>`).join('') || '<p class="mut">No bin needs collection with these settings.</p>';
+    }
+
+    async function collectAll() {
+      if (!plan) return;
+      await post('/api/collect', { ids: plan.selected });
+      rl.forEach(x => map.removeLayer(x));
+      rl = [];
+      plan = null;
+      $('trips').innerHTML = '';
+      refresh();
+    }
+
+    async function sendReport() {
+      await post('/api/report', { bin_id: $('rb').value, type: $('rt').value });
+      refresh();
+    }
+
+    async function resetAll() {
+      await post('/api/reset', {});
+      location.reload();
+    }
+
+    // ---------- 24 h forecast charts ----------
+    async function forecast() {
+      const f = await j('/api/forecast');
+      const draw = (id, cfg) => {
+        if (charts[id]) charts[id].destroy();
+        charts[id] = new Chart($(id), cfg);
+      };
+
+      draw('c1', {
+        type: 'line',
+        data: {
+          labels: f.hours,
+          datasets: Object.entries(f.zone_rate).map(([zone, values], i) => ({
+            label: zone, data: values, borderColor: COL[i], tension: .35, pointRadius: 0
+          }))
+        },
+        options: { plugins: { title: { display: true, text: 'Fill rate by zone (% of bin per hour)' } } }
+      });
+
+      draw('c2', {
+        type: 'line',
+        data: {
+          labels: f.hours,
+          datasets: [
+            { label: 'bins ≥70%', data: f.over70, borderColor: '#d99a0b', stepped: true },
+            { label: 'bins full', data: f.full, borderColor: '#c2410c', stepped: true }
+          ]
+        },
+        options: { plugins: { title: { display: true, text: 'Bins needing pickup if none is collected' } } }
+      });
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
